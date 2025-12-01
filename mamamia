@@ -1,0 +1,277 @@
+import React, { useState, useMemo } from 'react';
+import { Trash2, Meh, Search, Users, Cpu, Rss } from 'lucide-react';
+
+// --- Local Lexicons (Used for all analysis) ---
+
+const POSITIVE_WORDS = new Set(['excellent', 'great', 'best', 'love', 'happy', 'joy', 'wonderful', 'amazing', 'fantastic', 'success', 'thrilled', 'positive', 'good', 'superb', 'benefit', 'advantage', 'strong', 'achieve', 'outstanding', 'flawless', 'victory', 'genius']);
+const NEGATIVE_WORDS = new Set(['awful', 'terrible', 'worst', 'hate', 'sad', 'misery', 'horrible', 'disaster', 'failure', 'stress', 'disappointed', 'negative', 'bad', 'poor', 'harm', 'disadvantage', 'weak', 'fail', 'problem', 'fault', 'crap', 'unacceptable', 'sucks', 'tragedy']);
+const COMPARISON_TRIGGERS = new Set(['better', 'worse', 'superior', 'inferior', 'always', 'all', 'none', 'every', 'only', 'must', 'should', 'best', 'worst', 'greatest', 'least', 'cannot', 'never', 'greater']);
+const ATTRIBUTE_WORDS = new Set(['bold', 'emotional', 'passive', 'aggressive', 'smart', 'lazy', 'hardworking', 'sensitive', 'rational', 'caring', 'ambitious', 'weak', 'strong', 'creative', 'loud', 'quiet', 'reserved', 'dominant', 'submissive', 'nurturing', 'logical', 'brave', 'courageous', 'fearless', 'timid', 'fearful', 'vulnerable', 'independent', 'dependent', 'nasty', 'kind', 'generous', 'selfish', 'humble', 'arrogant']);
+const GROUP_NOUN_TRIGGERS = new Set(['men', 'women', 'boys', 'girls', 'teens', 'adults', 'children', 'people', 'group', 'class', 'students', 'teachers', 'workers', 'engineers', 'artists', 'scientists', 'black', 'white', 'asian', 'hispanic', 'caucasian', 'european', 'american', 'african', 'latino', 'muslims', 'christians', 'jews', 'buddhists', 'immigrants', 'citizens', 'foreigners', 'locals', 'poor', 'rich', 'elderly', 'disabled', 'straight', 'gay', 'lesbian']);
+const ABSOLUTISM_TRIGGERS = new Set(['irrefutably', 'undeniable', 'clearly', 'obvious', 'fact', 'certainly', 'definitely', 'without question', 'knows', 'proves', 'undoubtedly']);
+
+// Main component of the application
+const App = () => {
+  const [inputText, setInputText] = useState('');
+  const [biasResult, setBiasResult] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  // --- Utility Functions ---
+
+  const handleClearText = () => {
+    setInputText('');
+    setBiasResult(null); 
+    setError(null);
+  };
+  
+  // Local keyword analysis - this is the ONLY source of "analysis" now.
+  const runLocalAnalysis = (words) => {
+    let positiveCount = 0;
+    let negativeCount = 0;
+    let stereotypeTriggers = 0;
+    let absolutismTriggers = 0;
+
+    for (let i = 0; i < words.length; i++) {
+        const word = words[i];
+        
+        // Sentiment
+        if (POSITIVE_WORDS.has(word)) {
+            positiveCount++;
+        } else if (NEGATIVE_WORDS.has(word)) {
+            negativeCount++;
+        }
+
+        // Stereotype/Comparison
+        if (GROUP_NOUN_TRIGGERS.has(word)) {
+            const start = Math.max(0, i - 2);
+            const end = Math.min(words.length, i + 3);
+            const surroundingWords = words.slice(start, end).filter((w, index) => index !== (i - start)); 
+
+            if (surroundingWords.some(w => COMPARISON_TRIGGERS.has(w) || ATTRIBUTE_WORDS.has(w))) {
+                stereotypeTriggers++;
+            }
+        }
+        
+        // Absolutism
+        if (ABSOLUTISM_TRIGGERS.has(word)) {
+            absolutismTriggers++;
+        }
+    }
+
+    const totalSentimentWords = positiveCount + negativeCount;
+    // Score ranges from -1 (fully negative) to 1 (fully positive)
+    const sentimentScore = totalSentimentWords > 0 ? (positiveCount - negativeCount) / totalSentimentWords : 0;
+    
+    return { positiveCount, negativeCount, stereotypeTriggers, absolutismTriggers, sentimentScore, totalSentimentWords };
+  };
+
+
+  // Main Analysis Function - Now uses only rules based on local keyword counts
+  const analyzeBias = async () => {
+    if (wordCount === 0) return;
+    setIsLoading(true);
+    setError(null);
+    setBiasResult(null);
+
+    const trimmedText = inputText.trim();
+    // Normalize and clean text
+    const cleanedText = trimmedText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()"'’“”—]/g, " ");
+    const words = cleanedText.split(/\s+/).filter(word => word.trim() !== '');
+
+    // 1. Run the local lexicon analysis
+    const localBreakdown = runLocalAnalysis(words);
+    
+    let verdict = 'Rule-Based: Generally Neutral';
+    let primaryBiasType = 'No major triggers detected.';
+    let detailedExplanation = 'The text contains few keywords linked to bias, stereotyping, or extreme sentiment.';
+
+    // 2. Apply Rule-Based Logic (Simple Heuristics)
+    const { stereotypeTriggers, absolutismTriggers, sentimentScore, totalSentimentWords } = localBreakdown;
+
+    if (stereotypeTriggers > 0 && absolutismTriggers > 0) {
+        verdict = 'Rule-Based: HIGHLY BIASED';
+        primaryBiasType = 'Stereotype + Absolutism';
+        detailedExplanation = `The text combines group nouns with strong judgmental attributes and uses absolutist language (${absolutismTriggers} triggers).`;
+    } else if (stereotypeTriggers > 0) {
+        verdict = 'Rule-Based: Potential Stereotyping';
+        primaryBiasType = 'Group Stereotype Triggers';
+        detailedExplanation = `Detected ${stereotypeTriggers} instances where a group noun is near a comparison or strong attribute.`;
+    } else if (absolutismTriggers > 0) {
+        verdict = 'Rule-Based: Absolutist Language';
+        primaryBiasType = 'Absolutist Language';
+        detailedExplanation = `Detected ${absolutismTriggers} keywords that imply certainty or irrefutable facts without evidence (e.g., 'always', 'fact').`;
+    } else if (totalSentimentWords > 2) {
+        if (sentimentScore >= 0.5) {
+            verdict = 'Rule-Based: Strong Positive Sentiment';
+            primaryBiasType = 'Positive Sentiment Overload';
+            detailedExplanation = `The text is overwhelmingly positive, which may mask underlying issues or lack objective analysis.`;
+        } else if (sentimentScore <= -0.5) {
+            verdict = 'Rule-Based: Strong Negative Sentiment';
+            primaryBiasType = 'Negative Sentiment Overload';
+            detailedExplanation = `The text uses excessive negative words, which can bias the reader's perception.`;
+        }
+    }
+
+
+    // 3. Combine results
+    setBiasResult({
+        ...localBreakdown,
+        verdict,
+        primaryBiasType,
+        detailedExplanation,
+    });
+
+    setIsLoading(false);
+  };
+
+  // Memoized character count for display
+  const wordCount = useMemo(() => {
+    const trimmedText = inputText.trim();
+    if (!trimmedText) return 0;
+    return trimmedText.split(/\s+/).length;
+  }, [inputText]);
+
+  // Helper to get bias display styles
+  const getBiasStyle = (verdict) => {
+    const lowerVerdict = verdict.toLowerCase();
+    if (lowerVerdict.includes('highly biased') || lowerVerdict.includes('potential stereotyping')) {
+        return { icon: Cpu, color: 'text-red-700', bg: 'bg-red-100', border: 'border-red-500' };
+    } else if (lowerVerdict.includes('absolutist') || lowerVerdict.includes('strong')) {
+        return { icon: Cpu, color: 'text-orange-600', bg: 'bg-orange-100', border: 'border-orange-400' };
+    } else if (lowerVerdict.includes('neutral')) {
+        return { icon: Meh, color: 'text-green-600', bg: 'bg-green-100', border: 'border-green-400' };
+    } else {
+        return { icon: Cpu, color: 'text-indigo-600', bg: 'bg-indigo-100', border: 'border-indigo-400' };
+    }
+  }
+
+
+  // Styling and content of the application
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 md:p-8">
+      <div className="max-w-xl mx-auto bg-white rounded-xl shadow-2xl p-6 md:p-10">
+
+        {/* Header */}
+        <header className="text-center mb-10 border-b pb-4">
+          <h1 className="4xl font-extrabold text-teal-700 flex items-center justify-center space-x-3">
+            <Rss className="w-8 h-8 text-yellow-500" />
+            <span>Rule-Based Lexicon Bias Detector</span>
+          </h1>
+          <p className="text-gray-600 mt-2 text-lg">
+            This version uses **static keyword lists** and **simple rules** only.
+            <span className='font-semibold text-red-500'> Contextual understanding is limited.</span>
+          </p>
+        </header>
+
+        {/* Input Text Area */}
+        <div className="mb-6">
+          <label htmlFor="inputArea" className="block text-xl font-semibold text-gray-800 mb-2">
+            Text to Check ({wordCount} words)
+          </label>
+          <textarea
+            id="inputArea"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            className="w-full h-40 p-4 border-2 border-teal-300 rounded-lg focus:ring-teal-500 focus:border-teal-500 transition duration-150 ease-in-out text-gray-800 resize-none shadow-inner text-base"
+            placeholder="Paste text like 'The result is undeniable fact' or 'Men are greater than women' to check for bias..."></textarea>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex justify-between items-center gap-4 mb-8">
+            {/* Analyze Bias Button */}
+            <button
+                onClick={analyzeBias}
+                disabled={wordCount === 0 || isLoading}
+                className="flex-grow flex items-center justify-center px-4 py-3 text-lg font-bold rounded-lg shadow-lg transition duration-300 ease-in-out 
+                    bg-teal-500 text-white hover:bg-teal-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+            >
+                {isLoading ? <Cpu className="w-5 h-5 mr-2 animate-spin" /> : <Search className="w-5 h-5 mr-2" />}
+                {isLoading ? 'Processing Locally...' : 'Analyze Bias (Rule-Based)'}
+            </button>
+
+            {/* Clear Button */}
+            <button
+                onClick={handleClearText}
+                className="p-3 bg-red-100 text-red-600 rounded-lg shadow hover:bg-red-200 transition duration-200"
+                title="Clear Text and Results"
+                disabled={isLoading}
+            >
+                <Trash2 className="w-6 h-6" />
+            </button>
+        </div>
+        
+        {/* Error Display */}
+        {error && (
+            <div className="p-4 mb-4 text-sm text-red-800 rounded-lg bg-red-100 border border-red-300">
+                <span className="font-medium">Error:</span> {error}
+            </div>
+        )}
+
+        {/* Bias Analysis Results Display */}
+        {biasResult && (
+            <div className={`mt-8 p-6 border-4 ${getBiasStyle(biasResult.verdict).border} ${getBiasStyle(biasResult.verdict).bg} rounded-xl shadow-xl`}>
+                
+                {/* RULE-BASED VERDICT */}
+                <div className="mb-6 pb-4 border-b">
+                    {(() => {
+                        const VerdictIcon = getBiasStyle(biasResult.verdict).icon;
+                        return (
+                            <h2 className={`text-2xl font-bold mb-2 flex items-center ${getBiasStyle(biasResult.verdict).color}`}>
+                                <VerdictIcon className="w-6 h-6 mr-3" />
+                                Detector Verdict: {biasResult.verdict}
+                            </h2>
+                        );
+                    })()}
+                    <p className="font-semibold text-lg text-gray-800">Primary Rule Trigger: {biasResult.primaryBiasType}</p>
+                    <p className="text-gray-700 italic mt-2">Rule Explanation: {biasResult.detailedExplanation}</p>
+                </div>
+
+
+                {/* KEYWORD BREAKDOWN */}
+                <div className="space-y-3">
+                    <h3 className="text-md font-semibold text-teal-700 mb-2 flex items-center">
+                        <Cpu className="w-4 h-4 mr-1"/> Keyword Breakdown (Local):
+                    </h3>
+                    <p className="text-sm text-gray-700 mb-4">These are the direct keyword counts used to determine the rule-based verdict.</p>
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                        <div className="p-3 bg-white rounded-lg shadow">
+                            <p className="text-xl font-bold text-orange-600">{biasResult.stereotypeTriggers}</p>
+                            <p className="text-sm text-gray-600">Stereotype/Attribute</p>
+                        </div>
+                        <div className="p-3 bg-white rounded-lg shadow">
+                            <p className="text-xl font-bold text-yellow-600">{biasResult.absolutismTriggers}</p>
+                            <p className="text-sm text-gray-600">Absolutism</p>
+                        </div>
+                        <div className="p-3 bg-white rounded-lg shadow">
+                            <p className="text-xl font-bold text-teal-700">
+                                {biasResult.sentimentScore.toFixed(2)}
+                            </p>
+                            <p className="text-sm text-gray-600">Sentiment Score</p>
+                        </div>
+                        <div className="p-3 bg-white rounded-lg shadow col-span-1">
+                            <p className="text-xl font-bold text-green-600">{biasResult.positiveCount}</p>
+                            <p className="text-sm text-gray-600">Positive Words</p>
+                        </div>
+                        <div className="p-3 bg-white rounded-lg shadow col-span-1">
+                            <p className="text-xl font-bold text-red-600">{biasResult.negativeCount}</p>
+                            <p className="text-sm text-gray-600">Negative Words</p>
+                        </div>
+                        <div className="p-3 bg-white rounded-lg shadow col-span-1">
+                            <p className="text-xl font-bold text-gray-600">{biasResult.totalSentimentWords}</p>
+                            <p className="text-sm text-gray-600">Total Sentiment Words</p>
+                        </div>
+                    </div>
+                </div>
+
+                <p className="text-sm text-gray-700 mt-4 border-t pt-3">
+                    <span className="font-semibold">Disclaimer:</span> This detector cannot understand context, irony, or subtle meaning. It is only useful for spotting strong keywords.
+                </p>
+            </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default App;
